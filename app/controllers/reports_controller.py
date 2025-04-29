@@ -1,13 +1,14 @@
-from fastapi import APIRouter, Query, UploadFile, File, Form, Depends
-from starlette import status
+from fastapi import APIRouter, UploadFile, File, Form, Depends, Response
 
-from app.entities.report import ReportFilters, ReportInDTO
+from app.entities.report import ReportFilters, ReportInDTO, ReportInfoOutDTO
 from app.services.get_report_info_service import GetReportInfoService
+from app.services.get_report_file_pdf_service import GetReportFilePdfService
 
 router = APIRouter(prefix='/reports')
 
-
 get_report_info_service = GetReportInfoService()
+get_report_file_pdf_service = GetReportFilePdfService()
+
 
 def get_report_filter(
         filter_type: str = Form(...),
@@ -21,8 +22,13 @@ def get_report_filter(
 async def get_report_info(
         file: UploadFile = File(...),
         filters: ReportFilters = Depends(get_report_filter)
+) -> ReportInfoOutDTO:
+    return get_report_info_service.execute(ReportInDTO(file=file, filters=filters))
+
+
+@router.post('/pdf')
+async def get_report_pdf(
+        report_info: ReportInfoOutDTO
 ):
-    return get_report_info_service.execute(ReportInDTO(
-        file=file,
-        filters=filters
-    ))
+    pdf_bytes = get_report_file_pdf_service.execute(report_info)
+    return Response(content=pdf_bytes, media_type="application/pdf")
