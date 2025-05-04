@@ -24,7 +24,7 @@ class GetReportInfoService:
 
     def process_xlsx(self, file: UploadFile) -> Workbook:
         file.file.seek(0)
-        workbook = load_workbook(file.file)
+        workbook = load_workbook(file.file, data_only=True)
         workbook_processed = Workbook()
         accepted_sheets = ['Por Município', 'Profissionais ativos_PA', 'Profissionais ativos_PB']
 
@@ -85,7 +85,7 @@ class GetReportInfoService:
             if filters.scope == 'REGIÃO':
                 return ReportInfoOutDTO(
                     title=f'REGIÃO - {filters.value.upper()}',
-                    metrics=self.get_metrics_regional_regiao(df_regiao, df_profissionais, filters.value)
+                    metrics=self.get_metrics_regional_regiao(df_regiao, df_profissionais, filters.value.upper())
                 )
             elif filters.scope == 'UF':
                 return ReportInfoOutDTO(
@@ -108,9 +108,9 @@ class GetReportInfoService:
 
     @staticmethod
     def get_metrics_regional_regiao(df_regiao: pd.DataFrame, df_profissionais: pd.DataFrame, regiao: str) -> list[Metric]:
-        municipios_regiao = df_regiao[df_regiao['Região'] == regiao]['Município'].unique()
-        quantidade_estados = df_regiao[df_regiao['Região'] == regiao]['UF'].nunique()
-        quantidade_populacao = df_regiao[df_regiao['Região'] == regiao]['População 2021'].sum()
+        municipios_regiao = df_regiao[df_regiao['Região'].str.upper() == regiao]['Município'].unique()
+        quantidade_estados = df_regiao[df_regiao['Região'].str.upper() == regiao]['UF'].nunique()
+        quantidade_populacao = df_regiao[df_regiao['Região'].str.upper() == regiao]['População 2021'].sum()
         quantidade_profissionais = df_profissionais[df_profissionais['Municipio/DEEI'].isin(municipios_regiao)][
             'CPF'].nunique()
         metrics = [
@@ -138,8 +138,7 @@ class GetReportInfoService:
             Metric(metric="Potencial de cobertura do programa", value=potencial_cobertura),# REVISAR
             Metric(metric="Total de municípios", value=quantidade_municipios),
             Metric(metric="Total de municípios contemplados", value=municipios_contemplados),# REVISAR
-            Metric(metric="Municípios contemplados (%)", value=percentual_contemplados),# REVISAR
-
+            Metric(metric="Municípios contemplados (%)", value=f'{percentual_contemplados}%'),# REVISAR
         ]
         return metrics
 
@@ -162,40 +161,31 @@ class GetReportInfoService:
         return metrics
 
     @staticmethod
-    def get_metrics_profissional_geral(df_profissionais: pd.DataFrame) -> list[Metric]:
-        quantidade_total_profissionais = df_profissionais['CPF'].nunique()
-        quantidade_pa = df_profissionais[df_profissionais['Categoria'] == 'Profissionais ativos_PA']['CPF'].nunique()
-        quantidade_pb = df_profissionais[df_profissionais['Categoria'] == 'Profissionais ativos_PB']['CPF'].nunique()
-        metrics = [
-            Metric(metric="quantidade_total_profissionais", value=quantidade_total_profissionais),
-            Metric(metric="quantidade_profissionais_pa", value=quantidade_pa),
-            Metric(metric="quantidade_profissionais_pb", value=quantidade_pb)
-        ]
-        return metrics
-
-    @staticmethod
     def get_metrics_profissional(df_profissionais: pd.DataFrame, cpf: str) -> list[Metric]:
         def format_cpf(cpf):
             cleaned_cpf = re.sub(r'\D', '', str(cpf))
             if len(cleaned_cpf) == 11:
-                return f"{cleaned_cpf[:3]}.{cleaned_cpf[3:6]}.{cleaned_cpf[6:9]}-{cleaned_cpf[9:]}"
+                return f"XXX.{cleaned_cpf[3:6]}.XXX-{cleaned_cpf[9:]}"
             return cpf
 
+        quantidade_total_profissionais = df_profissionais['CPF'].nunique()
+        quantidade_pa = df_profissionais[df_profissionais['Categoria'] == 'Profissionais ativos_PA']['CPF'].nunique()
+        quantidade_pb = df_profissionais[df_profissionais['Categoria'] == 'Profissionais ativos_PB']['CPF'].nunique()
         df_profissionais['cpf_limpo'] = df_profissionais['CPF'].str.replace(r'\D', '', regex=True)
-        profissional = df_profissionais[df_profissionais['cpf_limpo'] == cpf]
+        profissional = df_profissionais[df_profissionais['cpf_limpo'] == re.sub(r'\D', '', str(cpf))]
         if profissional.empty:
             return []
         profissional = profissional.iloc[0]
-        idade = datetime.now().year - pd.to_datetime(profissional['Início das Atividades'],
-                                                     errors='coerce').year if pd.notnull(
-            profissional['Início das Atividades']) else "Não informado"
         metrics = [
+            Metric(metric="[GERAL] Total de profissionais", value=quantidade_total_profissionais),
+            Metric(metric="[GERAL] Profissionais PA", value=quantidade_pa),
+            Metric(metric="[GERAL] Profissionais PB", value=quantidade_pb),
             Metric(metric="CPF", value=format_cpf(profissional['CPF'])),
             Metric(metric="Nome completo", value=profissional['Nome']),
             Metric(metric="Ciclo", value=profissional['Ciclo']),
             Metric(metric="Perfil", value=profissional['Perfil do Profissional']), #ADD CONDICIONAL CODIGO B
             Metric(metric="Sexo", value=profissional['Sexo']),
-            Metric(metric="Idade", value=idade), #ONDE PEGAR?
+            Metric(metric="Idade", value='N/A'),
             Metric(metric="Raça/cor", value=profissional['Raça/Cor']),
             Metric(metric="Nacionalidade", value=profissional['Nacionalidade']),
             Metric(metric="Município", value=profissional['Municipio/DEEI'])
