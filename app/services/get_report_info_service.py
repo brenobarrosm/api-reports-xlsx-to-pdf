@@ -85,7 +85,7 @@ class GetReportInfoService:
             if filters.scope == 'REGIÃO':
                 return ReportInfoOutDTO(
                     title=f'REGIÃO - {filters.value.upper()}',
-                    metrics=self.get_metrics_regional_regiao(df_regiao, df_profissionais, filters.value.upper())
+                    metrics=self.get_metrics_regional_regiao(df_regiao, df_profissionais, filters.value)
                 )
             elif filters.scope == 'UF':
                 return ReportInfoOutDTO(
@@ -100,18 +100,11 @@ class GetReportInfoService:
             else:
                 pass
         else:
-            if filters.scope == 'GERAL':
-                return ReportInfoOutDTO(
-                    title=f'PROFISSIONAIS',
-                    metrics=self.get_metrics_profissional_geral(df_profissionais)
-                )
-            elif filters.scope == 'ESPECÍFICO':
-                return ReportInfoOutDTO(
-                    title=f'PROFISSIONAIS',
-                    metrics=self.get_metrics_profissional_especifico(df_profissionais, filters.value)
-                )
-            else:
-                pass
+            return ReportInfoOutDTO(
+                title=f'PROFISSIONAL',
+                metrics=self.get_metrics_profissional(df_profissionais, filters.value)
+            )
+
 
     @staticmethod
     def get_metrics_regional_regiao(df_regiao: pd.DataFrame, df_profissionais: pd.DataFrame, regiao: str) -> list[Metric]:
@@ -121,9 +114,9 @@ class GetReportInfoService:
         quantidade_profissionais = df_profissionais[df_profissionais['Municipio/DEEI'].isin(municipios_regiao)][
             'CPF'].nunique()
         metrics = [
-            Metric(metric="quantidade_estados", value=quantidade_estados),
-            Metric(metric="quantidade_populacao", value=quantidade_populacao),
-            Metric(metric="quantidade_profissionais", value=quantidade_profissionais)
+            Metric(metric="Quantidade de estados", value=quantidade_estados),
+            Metric(metric="População total", value=quantidade_populacao),
+            Metric(metric="quantidade de profissionais", value=quantidade_profissionais)
         ]
         return metrics
 
@@ -140,12 +133,13 @@ class GetReportInfoService:
                                         2) if quantidade_municipios > 0 else 0
         quantidade_profissionais = df_profissionais_uf['CPF'].nunique()
         metrics = [
-            Metric(metric="quantidade_populacao", value=quantidade_populacao),
-            Metric(metric="potencial_cobertura", value=potencial_cobertura),
-            Metric(metric="quantidade_municipios", value=quantidade_municipios),
-            Metric(metric="municipios_contemplados", value=municipios_contemplados),
-            Metric(metric="percentual_contemplados", value=percentual_contemplados),
-            Metric(metric="quantidade_profissionais", value=quantidade_profissionais)
+            Metric(metric="População total", value=quantidade_populacao),
+            Metric(metric="Total de profissionais", value=quantidade_profissionais),
+            Metric(metric="Potencial de cobertura do programa", value=potencial_cobertura),# REVISAR
+            Metric(metric="Total de municípios", value=quantidade_municipios),
+            Metric(metric="Total de municípios contemplados", value=municipios_contemplados),# REVISAR
+            Metric(metric="Municípios contemplados (%)", value=percentual_contemplados),# REVISAR
+
         ]
         return metrics
 
@@ -160,10 +154,10 @@ class GetReportInfoService:
         indice_vulnerabilidade = df_regiao_mun['Categoria de IVS'].values[
             0] if not df_regiao_mun.empty else "Não informado"
         metrics = [
-            Metric(metric="quantidade_populacao", value=quantidade_populacao),
-            Metric(metric="potencial_cobertura", value=potencial_cobertura),
-            Metric(metric="quantidade_profissionais", value=quantidade_profissionais),
-            Metric(metric="indice_vulnerabilidade", value=indice_vulnerabilidade)
+            Metric(metric="População total", value=quantidade_populacao),
+            Metric(metric="Total de profissionais", value=quantidade_profissionais),
+            Metric(metric="Potencial de cobertura do programa", value=potencial_cobertura),
+            Metric(metric="Índice de vulnerabilidade social", value=indice_vulnerabilidade)
         ]
         return metrics
 
@@ -180,7 +174,13 @@ class GetReportInfoService:
         return metrics
 
     @staticmethod
-    def get_metrics_profissional_especifico(df_profissionais: pd.DataFrame, cpf: str) -> list[Metric]:
+    def get_metrics_profissional(df_profissionais: pd.DataFrame, cpf: str) -> list[Metric]:
+        def format_cpf(cpf):
+            cleaned_cpf = re.sub(r'\D', '', str(cpf))
+            if len(cleaned_cpf) == 11:
+                return f"{cleaned_cpf[:3]}.{cleaned_cpf[3:6]}.{cleaned_cpf[6:9]}-{cleaned_cpf[9:]}"
+            return cpf
+
         df_profissionais['cpf_limpo'] = df_profissionais['CPF'].str.replace(r'\D', '', regex=True)
         profissional = df_profissionais[df_profissionais['cpf_limpo'] == cpf]
         if profissional.empty:
@@ -190,15 +190,16 @@ class GetReportInfoService:
                                                      errors='coerce').year if pd.notnull(
             profissional['Início das Atividades']) else "Não informado"
         metrics = [
-            Metric(metric="cpf", value=profissional['CPF']),
-            Metric(metric="nome_completo", value=profissional['Nome']),
-            Metric(metric="ciclo", value=profissional['Ciclo']),
-            Metric(metric="perfil", value=profissional['Perfil do Profissional']),
-            Metric(metric="sexo", value=profissional['Sexo']),
-            Metric(metric="idade", value=idade),
-            Metric(metric="raca_cor", value=profissional['Raça/Cor']),
-            Metric(metric="nacionalidade", value=profissional['Nacionalidade']),
-            Metric(metric="municipio", value=profissional['Municipio/DEEI'])
+            Metric(metric="CPF", value=format_cpf(profissional['CPF'])),
+            Metric(metric="Nome completo", value=profissional['Nome']),
+            Metric(metric="Ciclo", value=profissional['Ciclo']),
+            Metric(metric="Perfil", value=profissional['Perfil do Profissional']), #ADD CONDICIONAL CODIGO B
+            Metric(metric="Sexo", value=profissional['Sexo']),
+            Metric(metric="Idade", value=idade), #ONDE PEGAR?
+            Metric(metric="Raça/cor", value=profissional['Raça/Cor']),
+            Metric(metric="Nacionalidade", value=profissional['Nacionalidade']),
+            Metric(metric="Município", value=profissional['Municipio/DEEI'])
         ]
         return metrics
+
 

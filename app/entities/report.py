@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 class ReportFilters(BaseModel):
     type: Literal['REGIONAL', 'PROFISSIONAL']
-    scope: Literal['REGIÃO', 'UF', 'MUNICÍPIO', 'GERAL', 'ESPECÍFICO']
+    scope: Literal['REGIÃO', 'UF', 'MUNICÍPIO', 'PROFISSIONAL']
     value: str | None = Field(default=None)
 
 
