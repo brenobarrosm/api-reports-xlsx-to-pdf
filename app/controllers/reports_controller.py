@@ -12,10 +12,9 @@ get_report_file_pdf_service = GetReportFilePdfService()
 
 def get_report_filter(
         filter_type: str = Form(...),
-        scope: str = Form(...),
         value: str = Form(...)
 ) -> ReportFilters:
-    return ReportFilters(type=filter_type, scope=scope, value=value)
+    return ReportFilters(type=filter_type, value=value)
 
 
 @router.post('/info')

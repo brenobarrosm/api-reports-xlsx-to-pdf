@@ -1,195 +1,286 @@
 import re
+import unicodedata
 from datetime import datetime
+from io import BytesIO
+from typing import Any
 
 import pandas as pd
 from fastapi import UploadFile
-from openpyxl import load_workbook, Workbook
-from openpyxl.worksheet.worksheet import Worksheet
 
-from app.entities.report import ReportInDTO, ReportFilters, ReportInfoOutDTO, Metric
+from app.entities.report import ReportInDTO, ReportFilters, ReportInfoOutDTO, Metric, Section
+from app.exceptions.invalid_file_type_exception import InvalidFileTypeException
 
 
 class GetReportInfoService:
 
     def execute(self, report_in_dto: ReportInDTO) -> ReportInfoOutDTO:
         self.__raise_if_file_is_invalid(report_in_dto.file)
-        workbook = self.process_xlsx(report_in_dto.file)
-        report_info = self.get_metrics(workbook, report_in_dto.filters)
-        return report_info
+        sheets = self.process_xlsx(report_in_dto.file)
+        report_info_out_dto = self.get_metrics(sheets, report_in_dto.filters)
+        return report_info_out_dto
 
     @staticmethod
     def __raise_if_file_is_invalid(file: UploadFile):
         if file.headers['content-type'] != 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
-            raise Exception
+            raise InvalidFileTypeException
 
-    def process_xlsx(self, file: UploadFile) -> Workbook:
+    @staticmethod
+    def process_xlsx(file: UploadFile) -> dict[Any, pd.DataFrame]:
         file.file.seek(0)
-        workbook = load_workbook(file.file, data_only=True)
-        workbook_processed = Workbook()
-        accepted_sheets = ['Por Município', 'Profissionais ativos_PA', 'Profissionais ativos_PB']
+        contents = file.file.read()
+        excel_io = BytesIO(contents)
+        sheets = pd.read_excel(excel_io, sheet_name=None)
+        for nome_planilha, df in sheets.items():
+            col_cpf = [col for col in df.columns if 'CPF' in col]
+            if col_cpf:
+                cpf_col_name = col_cpf[0]
+                sheets[nome_planilha][cpf_col_name] = df[cpf_col_name].astype(str).str.zfill(11)
+        return sheets
 
-        if 'Sheet' in workbook_processed.sheetnames:
-            std = workbook_processed['Sheet']
-            workbook_processed.remove(std)
-
-        for sheet_name in workbook.sheetnames:
-            if sheet_name in accepted_sheets:
-                sheet = workbook[sheet_name]
-                sheet_processed = self.delete_merged_rows(sheet)
-                new_sheet = workbook_processed.create_sheet(title=sheet_name)
-                for row in sheet_processed.iter_rows(values_only=True):
-                    new_sheet.append(row)
-        return workbook_processed
-
-    def delete_merged_rows(self, sheet: Worksheet) -> Worksheet:
-        merged_rows = self.get_merged_rows(sheet)
-        for merge_range in list(sheet.merged_cells.ranges):
-            sheet.unmerge_cells(str(merge_range))
-        for row in merged_rows:
-            sheet.delete_rows(row)
-        return sheet
-
-    @staticmethod
-    def get_merged_rows(sheet):
-        merged_cells_str = str([str(merged_cell_str) for merged_cell_str in sheet.merged_cells.ranges])
-        merged_lines_numbers = set(re.findall(r'\d+', merged_cells_str))
-        numbers_list = [int(merged_lines_number) for merged_lines_number in merged_lines_numbers]
-        numbers_list.sort(reverse=True)
-        return numbers_list
-
-    @staticmethod
-    def get_dataframe(workbook: Workbook, df_type: str):
-        if df_type == 'REGIONAL':
-            sheet = workbook.get_sheet_by_name('Por Município')
-            data = sheet.values
-            columns = next(data)
-            df = pd.DataFrame(data, columns=columns)
-            return df
-        elif df_type == 'PROFISSIONAL':
-            df = pd.DataFrame()
-            for sheet_name in workbook.sheetnames:
-                if 'profissionais' in sheet_name.lower():
-                    sheet = workbook.get_sheet_by_name(sheet_name)
-                    data = sheet.values
-                    columns = next(data)
-                    df_sheet = pd.DataFrame(data, columns=columns)
-                    df_sheet["Categoria"] = sheet_name
-                    df = pd.concat([df, df_sheet])
-            return df
-        return None
-
-    def get_metrics(self, workbook: Workbook, filters: ReportFilters) -> ReportInfoOutDTO:
-        df_regiao = self.get_dataframe(workbook, 'REGIONAL')
-        df_profissionais = self.get_dataframe(workbook, 'PROFISSIONAL')
+    def get_metrics(self, sheets: dict[Any, pd.DataFrame], filters: ReportFilters) -> ReportInfoOutDTO:
         if filters.type == 'REGIONAL':
-            if filters.scope == 'REGIÃO':
-                return ReportInfoOutDTO(
-                    title=f'REGIÃO - {filters.value.upper()}',
-                    metrics=self.get_metrics_regional_regiao(df_regiao, df_profissionais, filters.value.upper())
-                )
-            elif filters.scope == 'UF':
-                return ReportInfoOutDTO(
-                    title=f'UF - {filters.value.upper()}',
-                    metrics=self.get_metrics_regional_uf(df_regiao, df_profissionais, filters.value.upper())
-                )
-            elif filters.scope == 'MUNICÍPIO':
-                return ReportInfoOutDTO(
-                    title=f'MUNICÍPIO - {filters.value.upper()}',
-                    metrics=self.get_metrics_regional_municipio(df_regiao, df_profissionais, filters.value.upper())
-                )
-            else:
-                pass
+            return ReportInfoOutDTO(
+                title=f'Relatório Municipal - {filters.value.split("|")[1].capitalize()}/{filters.value.split("|")[0].upper()}',
+                sections=self.get_metrics_regional(sheets, filters.value)
+            )
         else:
             return ReportInfoOutDTO(
-                title=f'PROFISSIONAL',
-                metrics=self.get_metrics_profissional(df_profissionais, filters.value)
+                title=f'Relatório do Médico',
+                sections=self.get_metrics_profissional(sheets, filters.value.upper())
             )
 
+    def get_metrics_regional(self, sheets, filter_value) -> list[Section]:
+        estado = str(filter_value.split('|')[0]).upper()
+        municipio = self.remove_accents(str(filter_value.split('|')[1])).upper()
+        regiao = sheets["MQI_Municipios_CGPLAD"][sheets["MQI_Municipios_CGPLAD"]["UF"] == estado]["Região"].iloc[0]
+
+        df_regiao = sheets["MQI_Municipios_CGPLAD"][sheets["MQI_Municipios_CGPLAD"]["Região"] == regiao]
+        quantidade_de_estados_regiao = df_regiao["UF"].nunique()
+        populacao_total_regiao = df_regiao["População 2021"].sum()
+        profissionais_totais_regiao = df_regiao["Total de vagas ocupadas"].sum()
+
+        df_estado = sheets["MQI_Municipios_CGPLAD"][sheets["MQI_Municipios_CGPLAD"]["UF"] == estado]
+        populacao_total_estado = df_estado["População 2021"].sum()
+        profissionais_totais_estado = df_estado["Total de vagas ocupadas"].sum()
+        potencial_cobertura_estado = df_estado["Potencial de cobertura da população pelo Programa "].sum()
+        quantidade_de_municipios_estado = df_estado["Município"].nunique()
+        total_municipios_contemplatos_estado = df_estado[df_estado["Total de vagas ocupadas"] > 0]["Município"].nunique()
+        percentual_municipios_contemplados_estado = (total_municipios_contemplatos_estado / quantidade_de_municipios_estado * 100)
+
+        df_municipio = sheets["MQI_Municipios_CGPLAD"][
+            (sheets["MQI_Municipios_CGPLAD"]["UF"] == estado) &
+            (sheets["MQI_Municipios_CGPLAD"]["Município"] == municipio)
+        ]
+
+        populacao_total_municipio = df_municipio["População 2021"].sum()
+        profissionais_totais_municipio = df_municipio["Total de vagas ocupadas"].sum()
+        potencial_cobertura_municipio = df_municipio["Potencial de cobertura da população pelo Programa "].sum()
+        vulnerabilidade_social_municipio = df_municipio["Categoria de IVS"].unique().tolist()[0]
+
+        return [
+            Section(name=f"Região: {regiao}", metrics=[
+                Metric(metric="Quantidade de estados", value=quantidade_de_estados_regiao),
+                Metric(metric="População total", value=populacao_total_regiao),
+                Metric(metric="Total de profissionais", value=profissionais_totais_regiao)
+            ]),
+            Section(name=f"Estado: {estado}", metrics=[
+                Metric(metric="Quantidade de municípios", value=quantidade_de_municipios_estado),
+                Metric(metric="População total", value=populacao_total_estado),
+                Metric(metric="Total de profissionais", value=profissionais_totais_estado),
+                Metric(metric="Potencial de cobertura", value=potencial_cobertura_estado),
+                Metric(metric="Municípios contemplados ao programa", 
+                        value=f"Total: {total_municipios_contemplatos_estado} | Percentual: {percentual_municipios_contemplados_estado}%")
+            ]),
+            Section(name=f"Município: {municipio.capitalize()}", metrics=[
+                Metric(metric="População total", value=populacao_total_municipio),
+                Metric(metric="Total de profissionais", value=profissionais_totais_municipio),
+                Metric(metric="Potencial de cobertura", value=potencial_cobertura_municipio),
+                Metric(metric="Índice de vulnerabilidade social", value=str(vulnerabilidade_social_municipio))
+            ])
+        ]
+
+    def get_metrics_profissional(self, sheets, filter_value) -> list[Section]:
+        cpf = filter_value
+        df_profissional = sheets["MQI_Monitoramento_PMMB"][sheets["MQI_Monitoramento_PMMB"]["CPF"] == cpf]
+
+        cpf_profissional = df_profissional['CPF'].iloc[0]
+        nome_profissional = df_profissional['Nome do Médico ATIVO'].iloc[0]
+        ciclo_profissional = df_profissional['Ciclo'].iloc[0]
+
+        municipio_profissional = df_profissional['Municipio/DSEI'].iloc[0]
+        estado_profissional = df_profissional['UF'].iloc[0]
+
+        df_estado = sheets["MQI_Municipios_CGPLAD"][sheets["MQI_Municipios_CGPLAD"]["UF"] == estado_profissional]
+        profissionais_totais_estado = df_estado["Total de vagas ocupadas"].sum()
+
+        df_municipio = sheets["MQI_Municipios_CGPLAD"][
+            (sheets["MQI_Municipios_CGPLAD"]["UF"] == estado_profissional) &
+            (sheets["MQI_Municipios_CGPLAD"]["Município"] == self.remove_accents(municipio_profissional).upper())
+        ]
+        profissionais_totais_municipio = df_municipio["Total de vagas ocupadas"].sum()
+        
+        perfil_profissional = df_profissional['Perfil do Médico'].iloc[0]
+        metrics_perfil = [Metric(metric="Perfil", value=perfil_profissional)]
+        foi_para_maav = "NÃO"
+        if perfil_profissional.strip().upper() == "INTERCAMBISTA":
+            df_maav = sheets["LOG_Maav"]
+            df_maav_filtrado = df_maav[df_maav["CPF"] == cpf]
+            if not df_maav_filtrado.empty:
+                resposta_maav = df_maav_filtrado["FOI PARA O MAAv?"].iloc[0]
+                if isinstance(resposta_maav, str) and resposta_maav.strip().upper() == "SIM":
+                    foi_para_maav = "SIM"
+            metrics_perfil.append(Metric(metric="Foi para o MAAv?", value=foi_para_maav))
+
+        sexo_profissional = df_profissional['Gênero'].iloc[0]
+        idade_profissional = str(df_profissional['Idade'].iloc[0])
+        raca_cor_profissional = df_profissional['Raça / cor'].iloc[0]
+
+        inicio_atividades_dt = df_profissional['Início das Atividades'].iloc[0]
+        fim_atividades_dt = df_profissional['Fim das Atividades'].iloc[0]
+
+        inicio_atividades = inicio_atividades_dt.strftime("%d/%m/%Y") if isinstance(inicio_atividades_dt,
+                                                                                    datetime) else str(
+            inicio_atividades_dt)
+        if isinstance(fim_atividades_dt, datetime):
+            if fim_atividades_dt > datetime.now():
+                fim_atividades = fim_atividades_dt.strftime("%d/%m/%Y") + ' (previsão)'
+            else:
+                fim_atividades = fim_atividades_dt.strftime("%d/%m/%Y")
+        else:
+            fim_atividades = str(fim_atividades_dt)
+
+        df_erario = sheets["ERA_Erario"]
+        df_erario_filtrado = df_erario[df_erario["CPF"] == cpf]
+        teve_erario_profissional = (
+            "SIM" if not df_erario_filtrado.empty and df_erario_filtrado["NECESSÁRIA RESTITUIÇÃO? S/N"].iloc[0] == "SIM"
+            else "NÃO"
+        )
+
+        especializacao_profissional = df_profissional['Oferta Formativa\nAtual 11/04/2025'].iloc[0]
+        instituicao_ensino_especializacao = \
+        df_profissional['Instituição de Ensino Superior\nque o Profissional está Vinculado'].iloc[0]
+
+        df_lic_med = sheets["LIC_Licencas_Medicas"]
+        df_lic_med_filtrado = df_lic_med[df_lic_med["CPF"] == cpf]
+
+        metrics_licenca = []
+        licencas_medicas_profissional = [
+            {
+                "tipo": "MÉDICA",
+                "inicio": row["INICIO DA LICENÇA MÉDICA"],
+                "fim": row["TERMINO DA LICENÇA MÉDICA"]
+            }
+            for _, row in df_lic_med_filtrado.iterrows()
+        ]
+
+        df_lic_parental = sheets["LIC_Matern_Patern"]
+        df_lic_parental_filtrado = df_lic_parental[df_lic_parental["CPF"] == cpf]
+        licencas_parental_profissional = [
+            {
+                "tipo": row["Tipo de Licença"],
+                "inicio": row["INÍCIO DA LICENÇA"]
+            }
+            for _, row in df_lic_parental_filtrado.iterrows()
+        ]
+
+        for licenca_medica in licencas_medicas_profissional:
+            inicio = licenca_medica['inicio'].strftime('%d/%m/%Y') if isinstance(licenca_medica['inicio'],
+                                                                                 datetime) else str(
+                licenca_medica['inicio'])
+            fim = licenca_medica['fim'].strftime('%d/%m/%Y') if isinstance(licenca_medica['fim'], datetime) else str(
+                licenca_medica['fim'])
+            metrics_licenca.append(Metric(metric=licenca_medica['tipo'], value=f"{inicio} - {fim}"))
+
+        for licenca_parental in licencas_parental_profissional:
+            inicio = licenca_parental['inicio'].strftime('%d/%m/%Y') if isinstance(licenca_parental['inicio'],
+                                                                                   datetime) else str(
+                licenca_parental['inicio'])
+            metrics_licenca.append(Metric(metric=licenca_parental['tipo'], value=inicio))
+
+        df_avaliacoes = sheets["PED_AvaliaMaisMedicos"]
+        df_avaliacoes_filtrado = df_avaliacoes[df_avaliacoes["CPF (Médico)"] == cpf]
+
+        if df_avaliacoes_filtrado.empty:
+            profissional_avaliado = "NÃO"
+            avaliacoes_profissional = []
+        else:
+            profissional_avaliado = "SIM"
+            avaliacoes_profissional = [
+                {
+                    "tipo": row["Tipo Avaliação"],
+                    "nota": row["Nota Final"]
+                }
+                for _, row in df_avaliacoes_filtrado.iterrows()
+            ]
+        metrics_avaliacoes = [Metric(metric="Foi avaliado?", value=profissional_avaliado)]
+        for avaliacao in avaliacoes_profissional:
+            metrics_avaliacoes.append(Metric(metric=f"Nota - {avaliacao['tipo']}", value=str(avaliacao['nota'])))
+
+        df_processos = sheets["NGA_ProcessosCGPP"]
+        df_processos_filtrado = df_processos[df_processos["CPF"] == cpf]
+
+        if df_processos_filtrado.empty:
+            tem_processo_administrativo = "NÃO"
+            processos_administrativos_profissional = []
+        else:
+            tem_processo_administrativo = "SIM"
+            processos_administrativos_profissional = []
+            for _, row in df_processos_filtrado.iterrows():
+                causas = [row["CAUSA 1"], row["CAUSA 2"], row["CAUSA 3"]]
+                causas_limpa = [c.strip() for c in causas if isinstance(c, str) and c.strip() != "-" and c.strip()]
+                causas_str = ", ".join(causas_limpa)
+                processos_administrativos_profissional.append({
+                    "categoria": row["CATEGORIA"],
+                    "causas": causas_str
+                })
+
+        metrics_processos_adm = [
+            Metric(metric="Profissional tem processos administrativos?", value=tem_processo_administrativo)]
+        for processo_adm in processos_administrativos_profissional:
+            metrics_processos_adm.append(Metric(metric=processo_adm['categoria'], value=processo_adm['causas']))
+
+        return [
+            Section(name="Dados da região", metrics=[
+                Metric(metric="Total de profissionais do estado", value=str(profissionais_totais_estado)),
+                Metric(metric="Total de profissionais do município", value=str(profissionais_totais_municipio))
+            ]),
+            Section(name="Dados do médico", metrics=[
+                Metric(metric="CPF", value=self.hide_cpf(cpf_profissional)),
+                Metric(metric="Nome completo", value=nome_profissional),
+                Metric(metric="Município", value=municipio_profissional + "/" + estado_profissional),
+                Metric(metric="Ciclo", value=ciclo_profissional),
+                Metric(metric="Sexo", value=sexo_profissional),
+                Metric(metric="Idade", value=idade_profissional),
+                Metric(metric="Raça/cor", value=raca_cor_profissional),
+            ]),
+            Section(name="Perfil", metrics=metrics_perfil),
+            Section(name="Período das atividades", metrics=[
+                Metric(metric="Início", value=inicio_atividades),
+                Metric(metric="Fim", value=fim_atividades),
+            ]),
+            Section(name="Erário", metrics=[
+                Metric(metric="Teve erário?", value=teve_erario_profissional)
+            ]),
+            Section(name="Informações acadêmicas", metrics=[
+                Metric(metric="Especialização", value=str(especializacao_profissional)),
+                Metric(metric="Instituição de ensino", value=str(instituicao_ensino_especializacao))
+            ]),
+            Section(name="Licenças", metrics=metrics_licenca),
+            Section(name="Avaliação do profissional", metrics=metrics_avaliacoes),
+            Section(name="Processos administrativos", metrics=metrics_processos_adm)
+        ]
 
     @staticmethod
-    def get_metrics_regional_regiao(df_regiao: pd.DataFrame, df_profissionais: pd.DataFrame, regiao: str) -> list[Metric]:
-        municipios_regiao = df_regiao[df_regiao['Região'].str.upper() == regiao]['Município'].unique()
-        quantidade_estados = df_regiao[df_regiao['Região'].str.upper() == regiao]['UF'].nunique()
-        quantidade_populacao = df_regiao[df_regiao['Região'].str.upper() == regiao]['População 2021'].sum()
-        quantidade_profissionais = df_profissionais[df_profissionais['Municipio/DEEI'].isin(municipios_regiao)][
-            'CPF'].nunique()
-        metrics = [
-            Metric(metric="Quantidade de estados", value=quantidade_estados),
-            Metric(metric="População total", value=quantidade_populacao),
-            Metric(metric="quantidade de profissionais", value=quantidade_profissionais)
-        ]
-        return metrics
+    def hide_cpf(cpf):
+        cleaned_cpf = re.sub(r'\D', '', str(cpf))
+        if len(cleaned_cpf) == 11:
+            return f"XXX.{cleaned_cpf[3:6]}.XXX-{cleaned_cpf[9:]}"
+        return cpf
+    
+    import unicodedata
 
     @staticmethod
-    def get_metrics_regional_uf(df_regiao: pd.DataFrame, df_profissionais: pd.DataFrame, uf: str) -> list[Metric]:
-        municipios_uf = df_regiao[df_regiao['UF'] == uf]['Município'].unique()
-        df_regiao_uf = df_regiao[df_regiao['UF'] == uf]
-        df_profissionais_uf = df_profissionais[df_profissionais['Municipio/DEEI'].isin(municipios_uf)]
-        quantidade_populacao = df_regiao_uf['População 2021'].sum()
-        potencial_cobertura = df_regiao_uf['Potencial de cobertura da população pelo Programa '].sum()
-        quantidade_municipios = df_regiao_uf['Município'].nunique()
-        municipios_contemplados = df_regiao_uf[df_regiao_uf['Total de vagas ocupadas'] > 0]['Município'].nunique()
-        percentual_contemplados = round((municipios_contemplados / quantidade_municipios) * 100,
-                                        2) if quantidade_municipios > 0 else 0
-        quantidade_profissionais = df_profissionais_uf['CPF'].nunique()
-        metrics = [
-            Metric(metric="População total", value=quantidade_populacao),
-            Metric(metric="Total de profissionais", value=quantidade_profissionais),
-            Metric(metric="Potencial de cobertura do programa", value=potencial_cobertura),# REVISAR
-            Metric(metric="Total de municípios", value=quantidade_municipios),
-            Metric(metric="Total de municípios contemplados", value=municipios_contemplados),# REVISAR
-            Metric(metric="Municípios contemplados (%)", value=f'{percentual_contemplados}%'),# REVISAR
-        ]
-        return metrics
-
-    @staticmethod
-    def get_metrics_regional_municipio(df_regiao: pd.DataFrame, df_profissionais: pd.DataFrame, municipio: str) -> list[
-        Metric]:
-        df_regiao_mun = df_regiao[df_regiao['Município'] == municipio]
-        df_profissionais_mun = df_profissionais[df_profissionais['Municipio/DEEI'] == municipio]
-        quantidade_populacao = df_regiao_mun['População 2021'].sum()
-        potencial_cobertura = df_regiao_mun['Potencial de cobertura da população pelo Programa '].sum()
-        quantidade_profissionais = df_profissionais_mun['CPF'].nunique()
-        indice_vulnerabilidade = df_regiao_mun['Categoria de IVS'].values[
-            0] if not df_regiao_mun.empty else "Não informado"
-        metrics = [
-            Metric(metric="População total", value=quantidade_populacao),
-            Metric(metric="Total de profissionais", value=quantidade_profissionais),
-            Metric(metric="Potencial de cobertura do programa", value=potencial_cobertura),
-            Metric(metric="Índice de vulnerabilidade social", value=indice_vulnerabilidade)
-        ]
-        return metrics
-
-    @staticmethod
-    def get_metrics_profissional(df_profissionais: pd.DataFrame, cpf: str) -> list[Metric]:
-        def format_cpf(cpf):
-            cleaned_cpf = re.sub(r'\D', '', str(cpf))
-            if len(cleaned_cpf) == 11:
-                return f"XXX.{cleaned_cpf[3:6]}.XXX-{cleaned_cpf[9:]}"
-            return cpf
-
-        quantidade_total_profissionais = df_profissionais['CPF'].nunique()
-        quantidade_pa = df_profissionais[df_profissionais['Categoria'] == 'Profissionais ativos_PA']['CPF'].nunique()
-        quantidade_pb = df_profissionais[df_profissionais['Categoria'] == 'Profissionais ativos_PB']['CPF'].nunique()
-        df_profissionais['cpf_limpo'] = df_profissionais['CPF'].str.replace(r'\D', '', regex=True)
-        profissional = df_profissionais[df_profissionais['cpf_limpo'] == re.sub(r'\D', '', str(cpf))]
-        if profissional.empty:
-            return []
-        profissional = profissional.iloc[0]
-        metrics = [
-            Metric(metric="[GERAL] Total de profissionais", value=quantidade_total_profissionais),
-            Metric(metric="[GERAL] Profissionais PA", value=quantidade_pa),
-            Metric(metric="[GERAL] Profissionais PB", value=quantidade_pb),
-            Metric(metric="CPF", value=format_cpf(profissional['CPF'])),
-            Metric(metric="Nome completo", value=profissional['Nome']),
-            Metric(metric="Ciclo", value=profissional['Ciclo']),
-            Metric(metric="Perfil", value=profissional['Perfil do Profissional']), #ADD CONDICIONAL CODIGO B
-            Metric(metric="Sexo", value=profissional['Sexo']),
-            Metric(metric="Idade", value='N/A'),
-            Metric(metric="Raça/cor", value=profissional['Raça/Cor']),
-            Metric(metric="Nacionalidade", value=profissional['Nacionalidade']),
-            Metric(metric="Município", value=profissional['Municipio/DEEI'])
-        ]
-        return metrics
-
+    def remove_accents(text: str) -> str:
+        normalized_text = unicodedata.normalize('NFD', text)
+        return ''.join(char for char in normalized_text if unicodedata.category(char) != 'Mn')
 
