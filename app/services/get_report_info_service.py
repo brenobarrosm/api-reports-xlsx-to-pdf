@@ -9,6 +9,7 @@ from fastapi import UploadFile
 
 from app.entities.report import ReportInDTO, ReportFilters, ReportInfoOutDTO, Metric, Section
 from app.exceptions.invalid_file_type_exception import InvalidFileTypeException
+from app.exceptions.profissional_not_found_exception import ProfissionalNotFoundException
 
 
 class GetReportInfoService:
@@ -45,7 +46,7 @@ class GetReportInfoService:
             )
         else:
             return ReportInfoOutDTO(
-                title=f'Relatório do Médico',
+                title=f'Relatório do(a) Médico(a)',
                 sections=self.get_metrics_profissional(sheets, filters.value.upper())
             )
 
@@ -66,6 +67,7 @@ class GetReportInfoService:
         quantidade_de_municipios_estado = df_estado["Município"].nunique()
         total_municipios_contemplatos_estado = df_estado[df_estado["Total de vagas ocupadas"] > 0]["Município"].nunique()
         percentual_municipios_contemplados_estado = (total_municipios_contemplatos_estado / quantidade_de_municipios_estado * 100)
+        percentual_potencial_cobertura_estado = (potencial_cobertura_estado / populacao_total_estado * 100)
 
         df_municipio = sheets["MQI_Municipios_CGPLAD"][
             (sheets["MQI_Municipios_CGPLAD"]["UF"] == estado) &
@@ -76,25 +78,28 @@ class GetReportInfoService:
         profissionais_totais_municipio = df_municipio["Total de vagas ocupadas"].sum()
         potencial_cobertura_municipio = df_municipio["Potencial de cobertura da população pelo Programa "].sum()
         vulnerabilidade_social_municipio = df_municipio["Categoria de IVS"].unique().tolist()[0]
+        percentual_potencial_cobertura_municipio = (potencial_cobertura_municipio / populacao_total_municipio * 100)
 
         return [
             Section(name=f"Região: {regiao}", metrics=[
                 Metric(metric="Quantidade de estados", value=quantidade_de_estados_regiao),
-                Metric(metric="População total", value=populacao_total_regiao),
-                Metric(metric="Total de profissionais", value=profissionais_totais_regiao)
+                Metric(metric="População total", value=self.format_number(populacao_total_regiao)),
+                Metric(metric="Quantidade de profissionais do PMMB", value=self.format_number(profissionais_totais_regiao))
             ]),
-            Section(name=f"Estado: {estado}", metrics=[
+            Section(name=f"Estado: {self.get_nome_estado_by_sigla(estado)}", metrics=[
                 Metric(metric="Quantidade de municípios", value=quantidade_de_municipios_estado),
-                Metric(metric="População total", value=populacao_total_estado),
-                Metric(metric="Total de profissionais", value=profissionais_totais_estado),
-                Metric(metric="Potencial de cobertura", value=potencial_cobertura_estado),
-                Metric(metric="Municípios contemplados ao programa", 
-                        value=f"Total: {total_municipios_contemplatos_estado} | Percentual: {percentual_municipios_contemplados_estado}%")
+                Metric(metric="Municípios que possuem no mínimo 1 médico",
+                       value=f"Total: {total_municipios_contemplatos_estado} ({percentual_municipios_contemplados_estado: .2f}%)"),
+                Metric(metric="População total", value=self.format_number(populacao_total_estado)),
+                Metric(metric="Total de profissionais do PMMB", value=self.format_number(profissionais_totais_estado)),
+                Metric(metric="Potencial de cobertura dos médicos do PMMB",
+                       value=f"Total: {self.format_number(potencial_cobertura_estado)} ({percentual_potencial_cobertura_estado: .2f}%)")
             ]),
-            Section(name=f"Município: {municipio.capitalize()}", metrics=[
-                Metric(metric="População total", value=populacao_total_municipio),
-                Metric(metric="Total de profissionais", value=profissionais_totais_municipio),
-                Metric(metric="Potencial de cobertura", value=potencial_cobertura_municipio),
+            Section(name=f"Município: {municipio.title()}", metrics=[
+                Metric(metric="População total", value=self.format_number(populacao_total_municipio)),
+                Metric(metric="Total de profissionais do PMMB", value=profissionais_totais_municipio),
+                Metric(metric="Potencial de cobertura dos médicos do PMMB",
+                       value=f"Total: {self.format_number(potencial_cobertura_municipio)} ({percentual_potencial_cobertura_municipio: .2f}%)"),
                 Metric(metric="Índice de vulnerabilidade social", value=str(vulnerabilidade_social_municipio))
             ])
         ]
@@ -103,37 +108,37 @@ class GetReportInfoService:
         cpf = filter_value
         df_profissional = sheets["MQI_Monitoramento_PMMB"][sheets["MQI_Monitoramento_PMMB"]["CPF"] == cpf]
 
-        cpf_profissional = df_profissional['CPF'].iloc[0]
-        nome_profissional = df_profissional['Nome do Médico ATIVO'].iloc[0]
-        ciclo_profissional = df_profissional['Ciclo'].iloc[0]
+        if df_profissional.empty:
+            raise ProfissionalNotFoundException
 
         municipio_profissional = df_profissional['Municipio/DSEI'].iloc[0]
         estado_profissional = df_profissional['UF'].iloc[0]
-
         df_estado = sheets["MQI_Municipios_CGPLAD"][sheets["MQI_Municipios_CGPLAD"]["UF"] == estado_profissional]
         profissionais_totais_estado = df_estado["Total de vagas ocupadas"].sum()
-
         df_municipio = sheets["MQI_Municipios_CGPLAD"][
             (sheets["MQI_Municipios_CGPLAD"]["UF"] == estado_profissional) &
             (sheets["MQI_Municipios_CGPLAD"]["Município"] == self.remove_accents(municipio_profissional).upper())
         ]
         profissionais_totais_municipio = df_municipio["Total de vagas ocupadas"].sum()
-        
+
+        cpf_profissional = df_profissional['CPF'].iloc[0]
+        nome_profissional = df_profissional['Nome do Médico ATIVO'].iloc[0]
+        ciclo_profissional = df_profissional['Ciclo'].iloc[0]
         perfil_profissional = df_profissional['Perfil do Médico'].iloc[0]
-        metrics_perfil = [Metric(metric="Perfil", value=perfil_profissional)]
         foi_para_maav = "NÃO"
-        if perfil_profissional.strip().upper() == "INTERCAMBISTA":
+        if perfil_profissional.strip().upper() == "INTERCAMBISTA" or perfil_profissional.strip().upper() == "RMS":
             df_maav = sheets["LOG_Maav"]
             df_maav_filtrado = df_maav[df_maav["CPF"] == cpf]
             if not df_maav_filtrado.empty:
                 resposta_maav = df_maav_filtrado["FOI PARA O MAAv?"].iloc[0]
                 if isinstance(resposta_maav, str) and resposta_maav.strip().upper() == "SIM":
                     foi_para_maav = "SIM"
-            metrics_perfil.append(Metric(metric="Foi para o MAAv?", value=foi_para_maav))
+            perfil_profissional += f' - Foi para o MAAv? {foi_para_maav}'
 
         sexo_profissional = df_profissional['Gênero'].iloc[0]
         idade_profissional = str(df_profissional['Idade'].iloc[0])
         raca_cor_profissional = df_profissional['Raça / cor'].iloc[0]
+        nacionalidade_profissional = df_profissional['Nacionalidade'].iloc[0]
 
         inicio_atividades_dt = df_profissional['Início das Atividades'].iloc[0]
         fim_atividades_dt = df_profissional['Fim das Atividades'].iloc[0]
@@ -151,10 +156,16 @@ class GetReportInfoService:
 
         df_erario = sheets["ERA_Erario"]
         df_erario_filtrado = df_erario[df_erario["CPF"] == cpf]
-        teve_erario_profissional = (
-            "SIM" if not df_erario_filtrado.empty and df_erario_filtrado["NECESSÁRIA RESTITUIÇÃO? S/N"].iloc[0] == "SIM"
-            else "NÃO"
-        )
+        if df_erario_filtrado.empty:
+            teve_erario_profissional = 'NÃO'
+        else:
+            teve_erario_profissional = (
+                "SIM" if not df_erario_filtrado.empty and df_erario_filtrado["NECESSÁRIA RESTITUIÇÃO? S/N"].iloc[0] == "SIM"
+                else "NÃO"
+            )
+        metrics_erario = [Metric(metric="Teve erário?", value=teve_erario_profissional)]
+        if teve_erario_profissional == 'SIM':
+            metrics_erario.append(Metric(metric="Motivo", value="DESLIGAMENTO"))
 
         especializacao_profissional = df_profissional['Oferta Formativa\nAtual 11/04/2025'].iloc[0]
         instituicao_ensino_especializacao = \
@@ -213,8 +224,10 @@ class GetReportInfoService:
                 for _, row in df_avaliacoes_filtrado.iterrows()
             ]
         metrics_avaliacoes = [Metric(metric="Foi avaliado?", value=profissional_avaliado)]
-        for avaliacao in avaliacoes_profissional:
-            metrics_avaliacoes.append(Metric(metric=f"Nota - {avaliacao['tipo']}", value=str(avaliacao['nota'])))
+        if profissional_avaliado == "SIM":
+            # ANO AVALIAÇÃO
+            for avaliacao in avaliacoes_profissional:
+                metrics_avaliacoes.append(Metric(metric=f"Nota - {avaliacao['tipo']}", value=str(avaliacao['nota'])))
 
         df_processos = sheets["NGA_ProcessosCGPP"]
         df_processos_filtrado = df_processos[df_processos["CPF"] == cpf]
@@ -235,39 +248,40 @@ class GetReportInfoService:
                 })
 
         metrics_processos_adm = [
-            Metric(metric="Profissional tem processos administrativos?", value=tem_processo_administrativo)]
+            Metric(metric="Profissional possui processos?", value=tem_processo_administrativo)]
         for processo_adm in processos_administrativos_profissional:
             metrics_processos_adm.append(Metric(metric=processo_adm['categoria'], value=processo_adm['causas']))
 
         return [
-            Section(name="Dados da região", metrics=[
-                Metric(metric="Total de profissionais do estado", value=str(profissionais_totais_estado)),
-                Metric(metric="Total de profissionais do município", value=str(profissionais_totais_municipio))
-            ]),
-            Section(name="Dados do médico", metrics=[
+            Section(name="Dados do profissional", metrics=[
                 Metric(metric="CPF", value=self.hide_cpf(cpf_profissional)),
                 Metric(metric="Nome completo", value=nome_profissional),
-                Metric(metric="Município", value=municipio_profissional + "/" + estado_profissional),
                 Metric(metric="Ciclo", value=ciclo_profissional),
+                Metric(metric="Perfil", value=perfil_profissional),
                 Metric(metric="Sexo", value=sexo_profissional),
                 Metric(metric="Idade", value=idade_profissional),
                 Metric(metric="Raça/cor", value=raca_cor_profissional),
+                Metric(metric="Município", value=municipio_profissional + "/" + estado_profissional),
+                Metric(metric="Nacionalidade", value=nacionalidade_profissional)
             ]),
-            Section(name="Perfil", metrics=metrics_perfil),
-            Section(name="Período das atividades", metrics=[
+            Section(name="Período de exercício das atividades", metrics=[
                 Metric(metric="Início", value=inicio_atividades),
                 Metric(metric="Fim", value=fim_atividades),
             ]),
-            Section(name="Erário", metrics=[
-                Metric(metric="Teve erário?", value=teve_erario_profissional)
-            ]),
-            Section(name="Informações acadêmicas", metrics=[
+            Section(name="Licenças", metrics=metrics_licenca),
+            Section(name="Erário", metrics=metrics_erario),
+            Section(name="Situação acadêmica", metrics=[
                 Metric(metric="Especialização", value=str(especializacao_profissional)),
                 Metric(metric="Instituição de ensino", value=str(instituicao_ensino_especializacao))
             ]),
-            Section(name="Licenças", metrics=metrics_licenca),
             Section(name="Avaliação do profissional", metrics=metrics_avaliacoes),
-            Section(name="Processos administrativos", metrics=metrics_processos_adm)
+            Section(name="Processos", metrics=metrics_processos_adm),
+            Section(name="Dados Gerais", metrics=[
+                Metric(metric=f"Total de profissionais no estado: {estado_profissional}",
+                       value=str(profissionais_totais_estado)),
+                Metric(metric=f"Total de profissionais no município: {municipio_profissional}",
+                       value=str(profissionais_totais_municipio))
+            ]),
         ]
 
     @staticmethod
@@ -284,3 +298,49 @@ class GetReportInfoService:
         normalized_text = unicodedata.normalize('NFD', text)
         return ''.join(char for char in normalized_text if unicodedata.category(char) != 'Mn')
 
+    @staticmethod
+    def format_number(numero) -> str:
+        try:
+            numero = float(str(numero).replace(',', '.'))
+        except ValueError:
+            return "Número inválido"
+        if numero.is_integer():
+            return f"{int(numero):,}".replace(",", ".")
+        else:
+            inteiro, decimal = f"{numero:.2f}".split(".")
+            inteiro_formatado = f"{int(inteiro):,}".replace(",", ".")
+            return f"{inteiro_formatado},{decimal}"
+
+    @staticmethod
+    def get_nome_estado_by_sigla(sigla: str) -> str | None:
+        estados = {
+            "AC": "Acre",
+            "AL": "Alagoas",
+            "AP": "Amapá",
+            "AM": "Amazonas",
+            "BA": "Bahia",
+            "CE": "Ceará",
+            "DF": "Distrito Federal",
+            "ES": "Espírito Santo",
+            "GO": "Goiás",
+            "MA": "Maranhão",
+            "MT": "Mato Grosso",
+            "MS": "Mato Grosso do Sul",
+            "MG": "Minas Gerais",
+            "PA": "Pará",
+            "PB": "Paraíba",
+            "PR": "Paraná",
+            "PE": "Pernambuco",
+            "PI": "Piauí",
+            "RJ": "Rio de Janeiro",
+            "RN": "Rio Grande do Norte",
+            "RS": "Rio Grande do Sul",
+            "RO": "Rondônia",
+            "RR": "Roraima",
+            "SC": "Santa Catarina",
+            "SP": "São Paulo",
+            "SE": "Sergipe",
+            "TO": "Tocantins"
+        }
+        sigla = sigla.strip().upper()
+        return estados.get(sigla, None)

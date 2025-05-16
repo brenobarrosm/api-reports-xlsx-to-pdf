@@ -51,7 +51,7 @@ class GetReportFilePdfService:
                 c.setFont(metric_name_font, metric_name_size)
                 c.setFillColor(metric_color)
                 c.drawString(70, y_position, f"{metric.metric}")
-                y_position -= 16
+                y_position -= 18
 
                 # Metric value
                 c.setFont(metric_value_font, metric_value_size)
