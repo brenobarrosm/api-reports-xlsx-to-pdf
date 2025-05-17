@@ -7,6 +7,7 @@ from app.entities.report import ReportInfoOutDTO
 
 
 class GetReportFilePdfService:
+
     def execute(self, report: ReportInfoOutDTO) -> bytes:
         pdf_io = io.BytesIO()
         c = canvas.Canvas(pdf_io, pagesize=A4)
@@ -23,7 +24,6 @@ class GetReportFilePdfService:
         text_width = c.stringWidth(title_text, title_font, title_size)
         c.drawString((width - text_width) / 2, height - 60, title_text)
 
-        # Reset color for content
         y_position = height - 110
 
         # Section and metrics styling
@@ -45,7 +45,6 @@ class GetReportFilePdfService:
             c.drawString(50, y_position, section.name)
             y_position -= 24
 
-            # Metrics
             for metric in section.metrics:
                 # Metric name
                 c.setFont(metric_name_font, metric_name_size)
@@ -53,11 +52,30 @@ class GetReportFilePdfService:
                 c.drawString(70, y_position, f"{metric.metric}")
                 y_position -= 18
 
-                # Metric value
+                # Metric value (com quebra de linha)
                 c.setFont(metric_value_font, metric_value_size)
                 c.setFillColor(metric_color)
-                c.drawString(90, y_position, str(metric.value))
-                y_position -= 20
+
+                max_text_width = width - 100  # margem lateral (50 de cada lado)
+                wrapped_lines = self.wrap_text(
+                    str(metric.value),
+                    metric_value_font,
+                    metric_value_size,
+                    max_text_width,
+                    c
+                )
+
+                for line in wrapped_lines:
+                    if y_position < 80:
+                        c.showPage()
+                        y_position = height - 50
+                        c.setFont(metric_value_font, metric_value_size)
+                        c.setFillColor(metric_color)
+
+                    c.drawString(90, y_position, line)
+                    y_position -= 16
+
+                y_position -= 4  # Espaço extra após valor
 
                 # Check for page break
                 if y_position < 80:
@@ -65,10 +83,14 @@ class GetReportFilePdfService:
                     y_position = height - 50
 
             # Divider after section
-            c.setStrokeColor(divider_color)
-            c.setLineWidth(divider_thickness)
-            c.line(50, y_position, width - 50, y_position)
-            y_position -= 30
+            if y_position >= 80:
+                c.setStrokeColor(divider_color)
+                c.setLineWidth(divider_thickness)
+                c.line(50, y_position, width - 50, y_position)
+                y_position -= 30
+            else:
+                c.showPage()
+                y_position = height - 80
 
         # Created_at footer
         footer_font = "Helvetica-Oblique"
@@ -84,3 +106,20 @@ class GetReportFilePdfService:
         c.save()
         pdf_bytes = pdf_io.getvalue()
         return pdf_bytes
+
+    @staticmethod
+    def wrap_text(text, font_name, font_size, max_width, canvas_obj):
+        lines = []
+        words = text.split()
+        current_line = ""
+
+        for word in words:
+            test_line = f"{current_line} {word}".strip()
+            if canvas_obj.stringWidth(test_line, font_name, font_size) <= max_width:
+                current_line = test_line
+            else:
+                lines.append(current_line)
+                current_line = word
+        if current_line:
+            lines.append(current_line)
+        return lines
