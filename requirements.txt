@@ -42,3 +42,6 @@ uvicorn[standard]
 weasyprint==65.1
 webencodings==0.5.1
 zopfli==0.2.3.post1
+python-jose~=3.4.0
+passlib~=1.7.4
+python-dotenv~=1.1.0

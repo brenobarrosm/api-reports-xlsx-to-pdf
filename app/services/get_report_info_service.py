@@ -41,7 +41,7 @@ class GetReportInfoService:
     def get_metrics(self, sheets: dict[Any, pd.DataFrame], filters: ReportFilters) -> ReportInfoOutDTO:
         if filters.type == 'REGIONAL':
             return ReportInfoOutDTO(
-                title=f'Relatório Municipal - {filters.value.split("|")[1].capitalize()}/{filters.value.split("|")[0].upper()}',
+                title=f'Relatório Municipal - {filters.value.split("|")[1].title()}/{filters.value.split("|")[0].upper()}',
                 sections=self.get_metrics_regional(sheets, filters.value)
             )
         else:

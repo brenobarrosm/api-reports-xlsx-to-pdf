@@ -17,5 +17,3 @@ def get_file_from_onedrive(data: OneDriveRequest):
     xlsx_bytes = get_file_from_onedrive_service.execute(data.url)
     return Response(content=xlsx_bytes.getvalue(),
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-
