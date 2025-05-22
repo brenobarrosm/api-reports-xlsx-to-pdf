@@ -9,6 +9,7 @@ from fastapi import UploadFile
 
 from app.entities.report import ReportInDTO, ReportFilters, ReportInfoOutDTO, Metric, Section
 from app.exceptions.invalid_file_type_exception import InvalidFileTypeException
+from app.exceptions.locale_not_found_exception import LocaleNotFoundException
 from app.exceptions.profissional_not_found_exception import ProfissionalNotFoundException
 
 
@@ -73,6 +74,9 @@ class GetReportInfoService:
             (sheets["MQI_Municipios_CGPLAD"]["UF"] == estado) &
             (sheets["MQI_Municipios_CGPLAD"]["Município"] == municipio)
         ]
+
+        if df_municipio.empty:
+            raise LocaleNotFoundException
 
         populacao_total_municipio = df_municipio["População 2021"].sum()
         profissionais_totais_municipio = df_municipio["Total de vagas ocupadas"].sum()

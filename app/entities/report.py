@@ -2,6 +2,7 @@ from datetime import datetime
 
 from typing import Literal
 
+import pytz
 from fastapi import UploadFile
 from pydantic import BaseModel, Field
 
@@ -29,4 +30,4 @@ class Section(BaseModel):
 class ReportInfoOutDTO(BaseModel):
     title: str
     sections: list[Section]
-    created_at: datetime = Field(default=datetime.now())
+    created_at: datetime = Field(default=datetime.now(pytz.timezone('America/Sao_Paulo')))

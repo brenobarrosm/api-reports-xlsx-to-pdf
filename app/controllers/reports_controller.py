@@ -5,7 +5,10 @@ from app.services.get_report_info_service import GetReportInfoService
 from app.services.get_report_file_pdf_service import GetReportFilePdfService
 from app.utils.auth import get_current_user
 
-router = APIRouter(prefix='/reports')
+router = APIRouter(
+    prefix='/reports',
+    dependencies=[Depends(get_current_user)]  # ✅ Protege todas as rotas deste router
+)
 
 get_report_info_service = GetReportInfoService()
 get_report_file_pdf_service = GetReportFilePdfService()
