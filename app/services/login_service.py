@@ -12,7 +12,7 @@ class LoginService:
     def __init__(self):
         self.SECRET_KEY = settings.SECRET_KEY
         self.ALGORITHM = "HS256"
-        self.ACCESS_TOKEN_EXPIRE_MINUTES = 60
+        self.ACCESS_TOKEN_EXPIRE_MINUTES = 120
         self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
         self.db = db
 
@@ -34,7 +34,7 @@ class LoginService:
         return Token(access_token=access_token, token_type="bearer")
 
     def get_user_by_email(self, email: str):
-        with self.db.get_connection() as conn:
+        with self.db.connect() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT id, email, hashed_password FROM users WHERE email = ?", (email,))
             row = cursor.fetchone()
