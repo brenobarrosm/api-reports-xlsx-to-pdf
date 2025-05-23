@@ -7,10 +7,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential gcc libffi-dev \
+    build-essential gcc libffi-dev libssl-dev python3-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Cria usuário não-root
 RUN adduser --disabled-password --gecos '' appuser && chown -R appuser /app
 USER appuser
 
@@ -20,5 +19,7 @@ RUN pip install --upgrade pip && \
     pip install --no-cache-dir "uvicorn[standard]"
 
 COPY --chown=appuser:appuser . .
+
+EXPOSE 8000
 
 CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
