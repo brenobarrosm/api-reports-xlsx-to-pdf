@@ -229,7 +229,7 @@ class GetReportInfoService:
             ]
         metrics_avaliacoes = [Metric(metric="Foi avaliado?", value=profissional_avaliado)]
         if profissional_avaliado == "SIM":
-            # ANO AVALIAÇÃO
+            metrics_avaliacoes.append(Metric(metric="Ano da avaliação", value="2024"))
             for avaliacao in avaliacoes_profissional:
                 metrics_avaliacoes.append(Metric(metric=f"Nota - {avaliacao['tipo']}", value=str(avaliacao['nota'])))
 
