@@ -10,6 +10,7 @@ class RegisterService:
         self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
     def execute(self, register_request: RegisterRequest):
+        self.__create_table_users_if_not_exists()
         try:
             with self.db.connect() as conn:
                 cursor = conn.cursor()
@@ -33,4 +34,16 @@ class RegisterService:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Erro ao registrar o usuário."
+            )
+
+    def __create_table_users_if_not_exists(self):
+        with self.db.connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    nome TEXT NOT NULL,
+                    email TEXT NOT NULL UNIQUE,
+                    hashed_password TEXT NOT NULL
+                );"""
             )
