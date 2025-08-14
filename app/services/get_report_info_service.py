@@ -54,26 +54,34 @@ class GetReportInfoService:
     def get_metrics_regional(self, sheets, filter_value) -> list[Section]:
         estado = str(filter_value.split('|')[0]).upper()
         municipio = self.remove_accents(str(filter_value.split('|')[1])).upper()
-        regiao = sheets["MQI_Municipios_CGPLAD"][sheets["MQI_Municipios_CGPLAD"]["UF"] == estado]["Região"].iloc[0]
 
-        df_regiao = sheets["MQI_Municipios_CGPLAD"][sheets["MQI_Municipios_CGPLAD"]["Região"] == regiao]
+        # ===== Sheet MQI_Municipios_CGPLAD =====
+        df_munic = sheets["MQI_Municipios_CGPLAD"]
+        regiao = df_munic[df_munic["UF"] == estado]["Região"].iloc[0]
+
+        # Região
+        df_regiao = df_munic[df_munic["Região"] == regiao]
         quantidade_de_estados_regiao = df_regiao["UF"].nunique()
         populacao_total_regiao = df_regiao["População 2021"].sum()
         profissionais_totais_regiao = df_regiao["Total de vagas ocupadas"].sum()
 
-        df_estado = sheets["MQI_Municipios_CGPLAD"][sheets["MQI_Municipios_CGPLAD"]["UF"] == estado]
+        # Estado
+        df_estado = df_munic[df_munic["UF"] == estado]
         populacao_total_estado = df_estado["População 2021"].sum()
         profissionais_totais_estado = df_estado["Total de vagas ocupadas"].sum()
         potencial_cobertura_estado = df_estado["Potencial de cobertura da população pelo Programa "].sum()
         quantidade_de_municipios_estado = df_estado["Município"].nunique()
-        total_municipios_contemplatos_estado = df_estado[df_estado["Total de vagas ocupadas"] > 0]["Município"].nunique()
-        percentual_municipios_contemplados_estado = (total_municipios_contemplatos_estado / quantidade_de_municipios_estado * 100)
+        total_municipios_contemplatos_estado = df_estado[df_estado["Total de vagas ocupadas"] > 0][
+            "Município"].nunique()
+        percentual_municipios_contemplados_estado = (
+                    total_municipios_contemplatos_estado / quantidade_de_municipios_estado * 100)
         percentual_potencial_cobertura_estado = (potencial_cobertura_estado / populacao_total_estado * 100)
 
-        df_municipio = sheets["MQI_Municipios_CGPLAD"][
-            (sheets["MQI_Municipios_CGPLAD"]["UF"] == estado) &
-            (sheets["MQI_Municipios_CGPLAD"]["Município"] == municipio)
-        ]
+        # Município
+        df_municipio = df_munic[
+            (df_munic["UF"] == estado) &
+            (df_munic["Município"] == municipio)
+            ]
 
         if df_municipio.empty:
             raise LocaleNotFoundException
@@ -84,11 +92,45 @@ class GetReportInfoService:
         vulnerabilidade_social_municipio = df_municipio["Categoria de IVS"].unique().tolist()[0]
         percentual_potencial_cobertura_municipio = (potencial_cobertura_municipio / populacao_total_municipio * 100)
 
+        # ===== Sheet MQI_Monitoramento_PMMB =====
+        df_monitoramento = sheets["MQI_Monitoramento_PMMB"]
+        df_monitor_municipio = df_monitoramento[
+            (df_monitoramento["UF"] == estado) &
+            (
+                    df_monitoramento["Municipio/DSEI"]
+                    .astype(str)
+                    .apply(self.remove_accents)
+                    .str.upper() == municipio
+            )
+            ]
+
+        total_vagas_monitor = len(
+            df_monitor_municipio) if not df_monitor_municipio.empty else 1  # evita divisão por zero
+
+        # --- Seção Vagas ---
+        ocupadas = (df_monitor_municipio["STATUS"] == "OCUPADA").sum()
+        desocupadas = (df_monitor_municipio["STATUS"] == "DESOCUPADA").sum()
+        ativas = (df_monitor_municipio["ATIVA / INATIVA"] == "ATIVA").sum()
+        inativas = (df_monitor_municipio["ATIVA / INATIVA"] == "INATIVA").sum()
+
+        percentual_ocupadas = (ocupadas / total_vagas_monitor * 100)
+        percentual_desocupadas = (desocupadas / total_vagas_monitor * 100)
+        percentual_ativas = (ativas / total_vagas_monitor * 100)
+        percentual_inativas = (inativas / total_vagas_monitor * 100)
+
+        # --- Seção Financiamento ---
+        financiamento_federal = (df_monitor_municipio["Financiamento"] == "FEDERAL").sum()
+        financiamento_municipal = (df_monitor_municipio["Financiamento"] == "MUNICIPAL").sum()
+
+        percentual_federal = (financiamento_federal / total_vagas_monitor * 100)
+        percentual_municipal = (financiamento_municipal / total_vagas_monitor * 100)
+
         return [
             Section(name=f"Região: {regiao}", metrics=[
                 Metric(metric="Quantidade de estados", value=quantidade_de_estados_regiao),
                 Metric(metric="População total", value=self.format_number(populacao_total_regiao)),
-                Metric(metric="Quantidade de profissionais do PMMB", value=self.format_number(profissionais_totais_regiao))
+                Metric(metric="Quantidade de profissionais do PMMB",
+                       value=self.format_number(profissionais_totais_regiao))
             ]),
             Section(name=f"Estado: {self.get_nome_estado_by_sigla(estado)}", metrics=[
                 Metric(metric="Quantidade de municípios", value=quantidade_de_municipios_estado),
@@ -105,6 +147,16 @@ class GetReportInfoService:
                 Metric(metric="Potencial de cobertura dos médicos do PMMB",
                        value=f"Total: {self.format_number(potencial_cobertura_municipio)} ({percentual_potencial_cobertura_municipio: .2f}%)"),
                 Metric(metric="Índice de vulnerabilidade social", value=str(vulnerabilidade_social_municipio))
+            ]),
+            Section(name="Vagas", metrics=[
+                Metric(metric="Ocupadas", value=f"Total: {ocupadas} ({percentual_ocupadas: .2f}%)"),
+                Metric(metric="Desocupadas", value=f"Total: {desocupadas} ({percentual_desocupadas: .2f}%)"),
+                Metric(metric="Ativas", value=f"Total: {ativas} ({percentual_ativas: .2f}%)"),
+                Metric(metric="Inativas", value=f"Total: {inativas} ({percentual_inativas: .2f}%)")
+            ]),
+            Section(name="Financiamento", metrics=[
+                Metric(metric="Federal", value=f"Total: {financiamento_federal} ({percentual_federal: .2f}%)"),
+                Metric(metric="Municipal", value=f"Total: {financiamento_municipal} ({percentual_municipal: .2f}%)")
             ])
         ]
 
